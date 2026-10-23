@@ -1,0 +1,13 @@
+# fleet.yml: tier and visibility of this repo (STANDARD.md). Exceptions: docs/rollout.md.
+tier: deploys
+visibility: public
+
+# Not met yet, outside a workflow PR (fleet-standard#9):
+# - No `develop` and `stage` branches and no dev/stg/prd/gate environments. The control repo
+#   creates them when `is_enforced` flips (fleet-standard#7). Until then the pull_request
+#   trigger fires only for PRs into main, and Dependabot (target-branch: develop) pauses.
+# - No deploy target. GitHub Pages is set to "workflow" build, but no workflow deploys it and the
+#   site answers 404. The fleet deploy stage cannot deploy to Pages (it grants no `pages: write`
+#   and `github-pages` is not an allowed environment name, WF-NAME-06). deploy.yml and
+#   promote.yml stay for CI-PROMOTE-01 and CI-TIER-01; scripts/deploy.sh and the e2e command
+#   stop with an error, so a dispatch never reports a deploy or a test that did not happen.
