@@ -1,45 +1,127 @@
-# The repo has no package.json and no build step: CI checks the JavaScript syntax,
-# the JSON files and that the nginx image serves the page and the article data.
+# The repo has no package.json and no build step (stack generic): lint checks the JavaScript
+# syntax, unit checks that every JSON file parses, build checks that the nginx image serves the
+# page and the article data. There is no e2e suite yet (fleet.yml, CI-TIER-01).
 name: ci
 
 on:
   pull_request:
-  push:
-    branches: [main]
+    branches: [develop, main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      e2e:
+        description: Run the e2e stage
+        type: boolean
+        default: false
 
-permissions:
-  contents: read
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  check:
+  changes:
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ github.event_name != 'pull_request' || steps.filter.outputs.code == 'true' }}
     steps:
-      # Every action is pinned to the commit of the named release tag.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Detect code changes
+        id: filter
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
         with:
-          persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 24
-      - name: JavaScript syntax
-        run: git ls-files -z 'js/*.js' | xargs -0 -n1 node --check
-      - name: JSON parses
-        run: git ls-files -z '*.json' | xargs -0 -n1 node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))'
-      - name: Docker image serves the page
+          predicate-quantifier: every
+          filters: |
+            code:
+              - '!**/*.md'
+              - '!docs/**'
+              - '!LICENSE'
+              - '!.github/ISSUE_TEMPLATE/**'
+
+  lint:
+    needs: changes
+    if: ${{ !failure() && !cancelled() && needs.changes.outputs.code == 'true' }}
+    permissions:
+      contents: read
+    uses: VelimirMueller/fleet-workflows/.github/workflows/_ci-lint.yml@v0.0.2
+    with:
+      stack: generic
+      # --input-type=module reads each file as an ES module on any Node version of the runner.
+      command: git ls-files -z 'js/*.js' | xargs -0 -n1 sh -c 'node --input-type=module --check < "$1"' sh
+
+  unit:
+    needs: [changes, lint]
+    if: ${{ !failure() && !cancelled() && needs.changes.outputs.code == 'true' }}
+    permissions:
+      contents: read
+    uses: VelimirMueller/fleet-workflows/.github/workflows/_ci-unit.yml@v0.0.2
+    with:
+      stack: generic
+      command: git ls-files -z '*.json' | xargs -0 -n1 node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))'
+      coverage-floor: 0
+
+  e2e:
+    needs: [changes, unit]
+    if: ${{ !failure() && !cancelled() && github.event_name == 'workflow_dispatch' && inputs.e2e }}
+    permissions:
+      contents: read
+    uses: VelimirMueller/fleet-workflows/.github/workflows/_ci-e2e.yml@v0.0.2
+    with:
+      stack: generic
+      command: echo "::error::article-viewer has no e2e suite yet"; exit 1
+
+  build:
+    needs: [changes, e2e]
+    if: ${{ !failure() && !cancelled() && needs.changes.outputs.code == 'true' }}
+    permissions:
+      contents: read
+    uses: VelimirMueller/fleet-workflows/.github/workflows/_ci-build.yml@v0.0.2
+    with:
+      stack: generic
+      # The build stage runs the command with errexit and pipefail on; the explicit exits stay as a guard.
+      command: |
+        docker build -t article-viewer:ci . || exit 1
+        docker run -d --name av -p 8080:80 article-viewer:ci || exit 1
+        trap 'docker rm -f av >/dev/null || true' EXIT
+        ready=0
+        for _ in $(seq 1 20); do
+          if curl -fsS -o /dev/null http://localhost:8080/; then ready=1; break; fi
+          sleep 1
+        done
+        if [ "$ready" -ne 1 ]; then docker logs av; echo "nginx did not answer in 20 s"; exit 1; fi
+        curl -fsS http://localhost:8080/ | grep -q '<script type="module"' || exit 1
+        curl -fsS http://localhost:8080/data/articles.json | node -e 'JSON.parse(require("fs").readFileSync(0, "utf8"))' || exit 1
+
+  conclusion:
+    needs: [changes, lint, unit, e2e, build]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Fail when a job failed or a required stage was skipped
+        env:
+          CODE: ${{ needs.changes.outputs.code }}
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+          LINT: ${{ needs.lint.result }}
+          UNIT: ${{ needs.unit.result }}
+          BUILD: ${{ needs.build.result }}
         run: |
-          docker build -t article-viewer:ci .
-          docker run -d --name av -p 8080:80 article-viewer:ci
-          trap 'docker rm -f av >/dev/null || true' EXIT
-          ready=0
-          for _ in $(seq 1 20); do
-            if curl -fsS -o /dev/null http://localhost:8080/; then ready=1; break; fi
-            sleep 1
+          for r in $RESULTS; do
+            case "$r" in success|skipped) ;; *) echo "::error::a job ended as $r"; exit 1 ;; esac
           done
-          if [ "$ready" -ne 1 ]; then docker logs av; echo "nginx did not answer in 20 s"; exit 1; fi
-          curl -fsS http://localhost:8080/ | grep -q '<script type="module"'
-          curl -fsS http://localhost:8080/data/articles.json | node -e 'JSON.parse(require("fs").readFileSync(0, "utf8"))'
+          if [ "$CODE" = "true" ]; then
+            for r in "$LINT" "$UNIT" "$BUILD"; do
+              [ "$r" = "success" ] || { echo "::error::a required stage did not run"; exit 1; }
+            done
+          fi
