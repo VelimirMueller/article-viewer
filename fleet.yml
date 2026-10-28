@@ -11,3 +11,9 @@ visibility: public
 #   and `github-pages` is not an allowed environment name, WF-NAME-06). deploy.yml and
 #   promote.yml stay for CI-PROMOTE-01 and CI-TIER-01; scripts/deploy.sh and the e2e command
 #   stop with an error, so a dispatch never reports a deploy or a test that did not happen.
+
+exceptions:
+  - rule: CI-UNIT-03
+    value:
+      lines: 0
+    reason: The unit stage is a JSON parse smoke test over the content files; no test runner with coverage exists, so the floor is 0.
