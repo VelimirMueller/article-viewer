@@ -53,7 +53,7 @@ jobs:
     if: ${{ !failure() && !cancelled() && needs.changes.outputs.code == 'true' }}
     permissions:
       contents: read
-    uses: VelimirMueller/fleet-workflows/.github/workflows/_ci-lint.yml@v0.0.1
+    uses: VelimirMueller/fleet-workflows/.github/workflows/_ci-lint.yml@v0.0.2
     with:
       stack: generic
       # --input-type=module reads each file as an ES module on any Node version of the runner.
@@ -64,7 +64,7 @@ jobs:
     if: ${{ !failure() && !cancelled() && needs.changes.outputs.code == 'true' }}
     permissions:
       contents: read
-    uses: VelimirMueller/fleet-workflows/.github/workflows/_ci-unit.yml@v0.0.1
+    uses: VelimirMueller/fleet-workflows/.github/workflows/_ci-unit.yml@v0.0.2
     with:
       stack: generic
       command: git ls-files -z '*.json' | xargs -0 -n1 node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))'
@@ -75,7 +75,7 @@ jobs:
     if: ${{ !failure() && !cancelled() && github.event_name == 'workflow_dispatch' && inputs.e2e }}
     permissions:
       contents: read
-    uses: VelimirMueller/fleet-workflows/.github/workflows/_ci-e2e.yml@v0.0.1
+    uses: VelimirMueller/fleet-workflows/.github/workflows/_ci-e2e.yml@v0.0.2
     with:
       stack: generic
       command: echo "::error::article-viewer has no e2e suite yet"; exit 1
@@ -85,10 +85,10 @@ jobs:
     if: ${{ !failure() && !cancelled() && needs.changes.outputs.code == 'true' }}
     permissions:
       contents: read
-    uses: VelimirMueller/fleet-workflows/.github/workflows/_ci-build.yml@v0.0.1
+    uses: VelimirMueller/fleet-workflows/.github/workflows/_ci-build.yml@v0.0.2
     with:
       stack: generic
-      # The stage runs the command with errexit off, so every line that can fail exits itself.
+      # The build stage runs the command with errexit and pipefail on; the explicit exits stay as a guard.
       command: |
         docker build -t article-viewer:ci . || exit 1
         docker run -d --name av -p 8080:80 article-viewer:ci || exit 1
